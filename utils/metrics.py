@@ -49,7 +49,7 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
             continue
         else:
             # Accumulate FPs and TPs
-            fpc = (1 - tp[i]).cumsum(0)
+            fpc = (~tp[i]).cumsum(0)
             tpc = tp[i].cumsum(0)
 
             # Recall

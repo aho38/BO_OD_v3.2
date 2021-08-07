@@ -337,12 +337,19 @@ def run(data,
                     correct_labels = torch.zeros(pred.shape[0], 1)
                 
                 
-                conf_ls_mask = torch.ones_like(conf_ls[si], dtype=torch.bool)
-                for i, cls in enumerate(correct_labels):
-                    conf_ls_mask[i, int(cls.item())] = False
-                cls_prob_without_target = conf_ls[si].masked_select(conf_ls_mask).view(conf_ls_mask.shape[0], conf_ls_mask.shape[1] - 1) # 79 prob withou the 1 target class prob
-                cls_pro_target = conf_ls[si].masked_select(~conf_ls_mask).view(conf_ls_mask.shape[0], 1)
-                loss = compute_loss(torch.cat((pred_obj, predn[:,4:], cls_prob_without_target, cls_pro_target), 1), mask, att_type=att_type)
+                # conf_ls_mask = torch.ones_like(conf_ls[si], dtype=torch.bool)
+                # for i, cls in enumerate(correct_labels):
+                #     conf_ls_mask[i, int(cls.item())] = False
+                # cls_prob_without_target = conf_ls[si].masked_select(conf_ls_mask).view(conf_ls_mask.shape[0], conf_ls_mask.shape[1] - 1) # 79 prob withou the 1 target class prob
+                # cls_pro_target = conf_ls[si].masked_select(~conf_ls_mask).view(conf_ls_mask.shape[0], 1)
+                # loss = compute_loss(torch.cat((pred_obj, predn[:,4:], cls_prob_without_target, cls_pro_target), 1), mask, att_type=att_type)
+                
+                stats = [mask, pred[:, 5], pred[:, 6], tcls]
+                if len(stats) and stats[0].any():
+                    p, r, ap, f1, ap_class = ap_per_class(*stats, plot=False, names=names)
+                    loss = torch.tensor(ap.mean()).to(pred)
+                else:
+                    loss = torch.tensor(0).to(pred)
 
                 if query == 0:
                     train_obj[si] = loss
