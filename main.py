@@ -344,10 +344,10 @@ def run(data,
                 # cls_pro_target = conf_ls[si].masked_select(~conf_ls_mask).view(conf_ls_mask.shape[0], 1)
                 # loss = compute_loss(torch.cat((pred_obj, predn[:,4:], cls_prob_without_target, cls_pro_target), 1), mask, att_type=att_type)
                 
-                stats = [mask, pred[:, 5], pred[:, 6], tcls]
-                if len(stats) and stats[0].any():
-                    p, r, ap, f1, ap_class = ap_per_class(*stats, plot=False, names=names)
-                    loss = torch.tensor(ap.mean()).to(pred)
+                loss_stats = [mask.cpu(), pred[:, 5].cpu(), pred[:, 6].cpu(), tcls]
+                if len(loss_stats) and loss_stats[0].any():
+                    p, r, ap, f1, ap_class = ap_per_class(*loss_stats, plot=False, names=names)
+                    loss = -torch.tensor(ap.mean()).to(pred)
                 else:
                     loss = torch.tensor(0).to(pred)
 
