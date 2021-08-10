@@ -364,7 +364,10 @@ def run(data,
                 if query_obj.max() > best_obj:
                     best_pred = out[query_obj.argmax()]
                     best_noise_img = noise_img[query_obj.argmax()]
-
+                    best_obj = query_obj.max()
+            if best_obj == 0:
+                break
+        
                 
 
         # ==================================================================================================================
@@ -416,7 +419,7 @@ def run(data,
             out, _ = non_max_suppression(out, 0.25, 0.45, labels=lb, multi_label=False, agnostic=True)
 
         # Plot images
-        if plots and (batch_i < 3 or batch_i % 10 == 0):
+        if plots and (batch_i < 3 or batch_i % 1 == 0):
             f = save_dir / f'val_batch{batch_i}_labels.jpg'  # labels
             Thread(target=plot_images, args=(img, targets, paths, f, names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
@@ -513,7 +516,7 @@ def parse_opt():
     parser.add_argument('--att-type', type=str, default='mislabel-ml', help='types of attack')
     parser.add_argument('--start-count', type=int, default=0, help='number of start count usually 0-10')
     parser.add_argument('--num-count', type=int, default=5000, help='number of images that will be processed')
-    parser.add_argument('--query-budget', type=int, default=10, help='number of queries we use')
+    parser.add_argument('--query-budget', type=int, default=20, help='number of queries we use')
     parser.add_argument('--norm', type=int, default=16, help='max norm of the image being perturbed')
     opt = parser.parse_args()
     opt.save_json |= opt.data.endswith('coco.yaml')
