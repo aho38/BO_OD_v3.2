@@ -15,3 +15,9 @@ Using bayesian optimization to generate adversarial examples that targets Object
   ```
   
 </details>
+
+<details open>
+  <summary>Digital Attack with Perlin Noise</summary>
+  The file the runs digital attack with Perlin Noise on [COCO Dataset](https://cocodataset.org/#home)
+  
+</details>
