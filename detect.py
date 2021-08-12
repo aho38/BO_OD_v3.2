@@ -8,10 +8,19 @@ import argparse
 import sys
 import time
 from pathlib import Path
+import numpy as np
 
 import cv2
+from screeninfo import get_monitors
 import torch
+import torchvision
+from torch._C import dtype
 import torch.backends.cudnn as cudnn
+
+import os
+
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
 
 FILE = Path(__file__).absolute()
 sys.path.append(FILE.parents[0].as_posix())  # add yolov5/ to path
@@ -21,10 +30,19 @@ from utils.datasets import LoadStreams, LoadImages
 from utils.general import check_img_size, check_requirements, check_imshow, colorstr, non_max_suppression, \
     apply_classifier, scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, save_one_box
 from utils.plots import colors, plot_one_box
-from utils.torch_utils import select_device, load_classifier, time_sync
+from utils.torch_utils import select_device, load_classifier, time_sync, gen_rand_tensor, init_torch_seeds
+from utils.perlin import noise_generator
+from utils.bo_utils import get_fitted_model
+from botorch.optim import optimize_acqf
+from botorch.acquisition.monte_carlo import qExpectedImprovement
+from botorch.sampling.samplers import SobolQMCNormalSampler
+
+def grab_frame(cap):
+    ret,frame = cap.read()
+    return cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
 
 
-@torch.no_grad()
+# @torch.no_grad()
 def run(weights='yolov5s.pt',  # model.pt path(s)
         source='data/images',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
@@ -49,6 +67,8 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         hide_labels=False,  # hide labels
         hide_conf=False,  # hide confidences
         half=False,  # use FP16 half-precision inference
+        no_webcam=False, # whether to show webcam
+        pause_time=1, # time pause between frame for noise to render
         ):
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
@@ -84,7 +104,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
     # Dataloader
     if webcam:
-        view_img = check_imshow()
+        view_img = check_imshow() if not no_webcam else False
         cudnn.benchmark = True  # set True to speed up constant image size inference
         dataset = LoadStreams(source, img_size=imgsz, stride=stride)
         bs = len(dataset)  # batch_size
@@ -93,11 +113,35 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         bs = 1  # batch_size
     vid_path, vid_writer = [None] * bs, [None] * bs
 
+    if no_webcam:
+        view_img = False
+
+    # Initialize seed
+    seed = 0
+    init_torch_seeds(seed=seed)
+
     # Run inference
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
     t0 = time.time()
-    for path, img, im0s, vid_cap in dataset:
+
+    # initialize img window
+    
+    win_x, win_y = [get_monitors()[1].width - 1, get_monitors()[1].height - 1 ]
+
+    screen = get_monitors()[0]
+    window_name = 'window'
+    cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
+    cv2.moveWindow(window_name, screen.x, screen.y)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN,
+                          cv2.WINDOW_FULLSCREEN)
+
+    # cv2.namedWindow('window', cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow('window', win_x * 2, win_y * 2)
+    # print(win_x, win_y)
+
+
+    for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
         if pt:
             img = torch.from_numpy(img).to(device)
             img = img.half() if half else img.float()  # uint8 to fp16/32
@@ -107,13 +151,88 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         if len(img.shape) == 3:
             img = img[None]  # expand for batch dim
 
+
+
+
+        ## ====================== BO TRAINING ======================
+        if frame_i == 0:
+            train_param = torch.zeros((5, 4)).to(img)
+            train_obj = torch.zeros(5,1).to(img)
+        if frame_i < 5:
+            ## period_x, period_y, and freq are all positive but smaller than d'. octaves are [1,4]
+            train_param[frame_i, 0] = gen_rand_tensor(low=20.0, high=160.0, size=(1, )).to(img) # period_x
+            train_param[frame_i, 1] = gen_rand_tensor(low=20.0, high=160.0, size=(1, )).to(img) # period_y
+            train_param[frame_i, 2] = gen_rand_tensor(low=0.51, high=4.5, size=(1, )).to(img) # octaves
+            train_param[frame_i, 3] = gen_rand_tensor(low=4.0, high=32.0, size=(1, )).to(img)  # freq
+
+            generated_noise = noise_generator(*img.shape[-2:], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
+            generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 3),int(win_x * 3)))
+
+            # image = cv2.resize(np.array(generated_noise), (win_x, win_y))
+
+            # print(generated_noise.size())
+            generated_noise = np.array(generated_noise.squeeze())
+            print(generated_noise.shape)
+            cv2.imshow('window', generated_noise)
+            time.sleep(pause_time)
+
+        else:
+            try:
+                gp_model = get_fitted_model(train_x=train_param, train_obj=train_obj, state_dict=state_dict)
+            except:
+                print("ERROR IN GP HAS OCCURED: please ensure covariant matrix is positive definite")
+                pass
+            qmc_sampler = SobolQMCNormalSampler(num_samples=200, seed=seed)
+            qEI = qExpectedImprovement(gp_model, best_f=best_obj, sampler=qmc_sampler)
+            candidates, _ = optimize_acqf(
+                                acq_function=qEI,
+                                bounds=torch.stack([
+                                    torch.tensor([20.0, 20.0, 0.51, 4.0]).to(img),
+                                    torch.tensor([160.0, 160.0, 4.5, 32.0]).to(img),
+                                ]),
+                                q=1,
+                                num_restarts=10,
+                                raw_samples=100,
+                                )
+
+            for i in range(len(candidates)):
+                generated_noise = noise_generator(*img.shape[-2:], period_x=candidates[i,0], period_y=candidates[i,1], octave=candidates[i,2], freq=candidates[i,3])
+                generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 3),int(win_x * 3)))
+            
+            # image = cv2.resize(np.array(generated_noise), (win_x, win_y))
+            generated_noise = np.array(generated_noise.squeeze())
+            cv2.imshow('window', np.array(generated_noise))
+            time.sleep(pause_time)
+            break
+
+            train_param = torch.cat((train_param, candidates),0)
+
+
+        state_dict = None if frame_i < 5 else gp_model.state_dict()
+
+        # ==========================================================
+
+
         # Inference
         t1 = time_sync()
-        if pt:
-            visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-            pred = model(img, augment=augment, visualize=visualize)[0]
-        elif onnx:
-            pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
+        with torch.no_grad():
+            if pt:
+                visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+                pred = model(img, augment=augment, visualize=visualize)[0]
+            elif onnx:
+                pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
+
+        ## ====================== Loss computation ======================
+        loss = - torch.rand(1).to(img) * 10
+
+        if frame_i < 5:
+            train_obj[frame_i] = loss[None]
+        else:
+            train_obj = torch.cat((train_obj, loss[None]), 0)
+        best_obj = loss
+
+        # ==========================================================
+
 
         # NMS
         pred, _ = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
@@ -188,6 +307,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                             save_path += '.mp4'
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
+        time.sleep(1)
 
     if save_txt or save_img:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
@@ -197,6 +317,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         strip_optimizer(weights)  # update model (to fix SourceChangeWarning)
 
     print(f'Done. ({time.time() - t0:.3f}s)')
+    
 
 
 def parse_opt():
@@ -225,6 +346,8 @@ def parse_opt():
     parser.add_argument('--hide-labels', default=False, action='store_true', help='hide labels')
     parser.add_argument('--hide-conf', default=False, action='store_true', help='hide confidences')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
+    parser.add_argument('--no-webcam',action='store_true', help='show webcam')
+    parser.add_argument('--pause-time', type=int, default=1, help='time paused for noise to render')
     opt = parser.parse_args()
     return opt
 

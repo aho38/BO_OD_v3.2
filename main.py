@@ -266,6 +266,7 @@ def run(data,
                 try:
                     gp_model = get_fitted_model(train_x=train_param, train_obj=train_obj, state_dict=state_dict)
                 except:
+                    print("ERROR IN GP HAS OCCURED: please ensure covariant matrix is positive definite")
                     continue
                 qmc_sampler = SobolQMCNormalSampler(num_samples=200, seed=seed)
                 qEI = qExpectedImprovement(gp_model, best_f=best_obj, sampler=qmc_sampler)
