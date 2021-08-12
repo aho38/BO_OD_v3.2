@@ -127,19 +127,19 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
     # initialize img window
     
-    win_x, win_y = [get_monitors()[1].width - 1, get_monitors()[1].height - 1 ]
 
     screen = get_monitors()[0]
     window_name = 'window'
-    cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
-    cv2.moveWindow(window_name, screen.x, screen.y)
-    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN,
-                          cv2.WINDOW_FULLSCREEN)
+    # cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
+    # cv2.moveWindow(window_name, screen.x, screen.y)
+    # cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN,
+    #                       cv2.WINDOW_FULLSCREEN)
+
+    win_x, win_y = [screen.width - 1, screen.height - 1 ]
 
     # cv2.namedWindow('window', cv2.WINDOW_NORMAL)
     # cv2.resizeWindow('window', win_x * 2, win_y * 2)
     # print(win_x, win_y)
-
 
     for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
         if pt:
@@ -166,13 +166,8 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             train_param[frame_i, 3] = gen_rand_tensor(low=4.0, high=32.0, size=(1, )).to(img)  # freq
 
             generated_noise = noise_generator(*img.shape[-2:], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
-            generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 3),int(win_x * 3)))
-
-            # image = cv2.resize(np.array(generated_noise), (win_x, win_y))
-
-            # print(generated_noise.size())
+            generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
             generated_noise = np.array(generated_noise.squeeze())
-            print(generated_noise.shape)
             cv2.imshow('window', generated_noise)
             time.sleep(pause_time)
 
@@ -197,13 +192,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
             for i in range(len(candidates)):
                 generated_noise = noise_generator(*img.shape[-2:], period_x=candidates[i,0], period_y=candidates[i,1], octave=candidates[i,2], freq=candidates[i,3])
-                generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 3),int(win_x * 3)))
-            
-            # image = cv2.resize(np.array(generated_noise), (win_x, win_y))
+                generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', np.array(generated_noise))
             time.sleep(pause_time)
-            break
 
             train_param = torch.cat((train_param, candidates),0)
 
