@@ -70,6 +70,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         half=False,  # use FP16 half-precision inference
         no_webcam=False, # whether to show webcam
         pause_time=1, # time pause between frame for noise to render
+        full_screen=False
         ):
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
@@ -130,6 +131,11 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
     screen = get_monitors()[0] # get monitor information
     window_name = 'window'
     win_x, win_y = [screen.width - 1, screen.height - 1 ]
+    if full_screen:
+        cv2.namedWindow('window', cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN,
+                            cv2.WINDOW_FULLSCREEN)
+        
 
     # ===================== get initial frame information =====================
     # set it as the ground truth
@@ -164,7 +170,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             print('Initial Label Generated')
             break
 
-        time.sleep(10) # in seconds so scene stablizes before taking ground truth
+        time.sleep(5) # in seconds so scene stablizes before taking ground truth
     # ================================================================================
 
     for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
@@ -192,8 +198,21 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             train_param[frame_i, 2] = gen_rand_tensor(low=0.51, high=4.5, size=(1, )).to(img) # octaves
             train_param[frame_i, 3] = gen_rand_tensor(low=4.0, high=32.0, size=(1, )).to(img)  # freq
 
-            generated_noise = noise_generator(*img.shape[-2:], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
-            generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
+            generated_noise = noise_generator(*[500, 500], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
+            
+            # left = int(np.floor(img.size(-2)/2))
+            # right = int(np.ceil(img.size(-2)/2))
+            # top = int(np.floor(img.size(-1)/2))
+            # bottom = int(np.ceil(img.size(-1)/2))
+
+            left = win_x + int(win_x * 0.4)
+            right = win_x + int(win_x * 0.4)
+            top = win_y + int(win_y * 0.2)
+            bottom = win_y + int(win_y * 0.2)
+
+            generated_noise = torch.nn.functional.pad(generated_noise, (left, right, top, bottom), 'constant', 0)
+            
+            # generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', generated_noise)
             time.sleep(pause_time) # in seconds
@@ -223,6 +242,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', np.array(generated_noise))
             time.sleep(pause_time) # in seconds
+            break
 
             train_param = torch.cat((train_param, candidates),0)
 
@@ -380,6 +400,7 @@ def parse_opt():
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--no-webcam',action='store_true', help='show webcam')
     parser.add_argument('--pause-time', type=int, default=0, help='time paused for noise to render')
+    parser.add_argument('--full-screen', action='store_true', help='whether to display image fullscreen ')
     opt = parser.parse_args()
     return opt
 
