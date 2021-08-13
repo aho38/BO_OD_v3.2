@@ -170,7 +170,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             print('Initial Label Generated')
             break
 
-        time.sleep(5) # in seconds so scene stablizes before taking ground truth
+        time.sleep(10) # in seconds so scene stablizes before taking ground truth
     # ================================================================================
 
     for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
