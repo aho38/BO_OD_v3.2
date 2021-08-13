@@ -5,6 +5,7 @@ Usage:
 """
 
 import argparse
+from main import process_batch_loss, compute_loss
 import sys
 import time
 from pathlib import Path
@@ -126,22 +127,49 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
     t0 = time.time()
 
     # initialize img window
-    
-
-    screen = get_monitors()[0]
+    screen = get_monitors()[0] # get monitor information
     window_name = 'window'
-    # cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
-    # cv2.moveWindow(window_name, screen.x, screen.y)
-    # cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN,
-    #                       cv2.WINDOW_FULLSCREEN)
-
     win_x, win_y = [screen.width - 1, screen.height - 1 ]
 
-    # cv2.namedWindow('window', cv2.WINDOW_NORMAL)
-    # cv2.resizeWindow('window', win_x * 2, win_y * 2)
-    # print(win_x, win_y)
+    # ===================== get initial frame information =====================
+    # set it as the ground truth
+    for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
+        if frame_i == 1: # skip the first frame in case camera is still adjusting
+            # preprocess frames from image
+            if pt:
+                img = torch.from_numpy(img).to(device)
+                img = img.half() if half else img.float()  # uint8 to fp16/32
+            elif onnx:
+                img = img.astype('float32')
+            img /= 255.0  # 0 - 255 to 0.0 - 1.0
+            if len(img.shape) == 3:
+                img = img[None]  # expand for batch dim
+
+            # Inference
+            t1 = time_sync()
+            with torch.no_grad():
+                if pt:
+                    visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+                    pred = model(img, augment=augment, visualize=visualize)[0]
+                elif onnx:
+                    pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
+
+            # NMS
+            pred, _ = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+            pred[:] = [torch.cat((i[0:,0:4],i[0:,5:]), 1) for i in pred]
+            t2 = time_sync()
+            
+            labels = torch.cat((pred[0][0:, -1:], pred[0][0:,0:4]), 1) # target labels
+
+            print('Initial Label Generated')
+            break
+
+        time.sleep(10) # in seconds so scene stablizes before taking ground truth
+    # ================================================================================
 
     for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
+
+        # preprocess frames from image
         if pt:
             img = torch.from_numpy(img).to(device)
             img = img.half() if half else img.float()  # uint8 to fp16/32
@@ -151,13 +179,12 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         if len(img.shape) == 3:
             img = img[None]  # expand for batch dim
 
-
+        
 
 
         ## ====================== BO TRAINING ======================
         if frame_i == 0:
             train_param = torch.zeros((5, 4)).to(img)
-            train_obj = torch.zeros(5,1).to(img)
         if frame_i < 5:
             ## period_x, period_y, and freq are all positive but smaller than d'. octaves are [1,4]
             train_param[frame_i, 0] = gen_rand_tensor(low=20.0, high=160.0, size=(1, )).to(img) # period_x
@@ -169,7 +196,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', generated_noise)
-            time.sleep(pause_time)
+            time.sleep(pause_time) # in seconds
 
         else:
             try:
@@ -195,7 +222,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                 generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', np.array(generated_noise))
-            time.sleep(pause_time)
+            time.sleep(pause_time) # in seconds
 
             train_param = torch.cat((train_param, candidates),0)
 
@@ -215,14 +242,28 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                 pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
 
         ## ====================== Loss computation ======================
-        loss = - torch.rand(1).to(img) * 10
+        loss_pred, _ = non_max_suppression(pred, 0.001, 0.6, classes, agnostic_nms, max_det=max_det)
 
-        if frame_i < 5:
-            train_obj[frame_i] = loss[None]
+        nl = len(labels)
+        tcls = labels[:, 0].tolist() if nl else [] #target class
+        predn = torch.cat((loss_pred[0][:, 0:4], loss_pred[0][:,5:]),1)
+
+        mask, correct_labels = process_batch_loss(predn, labels, torch.tensor(0.75).to(img))
+
+        loss = compute_loss(torch.cat((loss_pred[0][:,4:5], predn[:,4:]), 1), mask, 'fabricate')
+
+        print(loss)
+        print(loss[None,None].size())
+
+        if frame_i == 0:
+            train_obj = loss[None,None]
         else:
-            train_obj = torch.cat((train_obj, loss[None]), 0)
-        best_obj = loss
+            train_obj = torch.cat((train_obj, loss[None, None]), 0)
 
+        if frame_i >= 4:
+            best_obj, indx = train_obj.max(0)
+            best_pred = train_param[indx]
+        
         # ==========================================================
 
 
@@ -299,7 +340,6 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                             save_path += '.mp4'
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
-        time.sleep(1)
 
     if save_txt or save_img:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
@@ -339,7 +379,7 @@ def parse_opt():
     parser.add_argument('--hide-conf', default=False, action='store_true', help='hide confidences')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--no-webcam',action='store_true', help='show webcam')
-    parser.add_argument('--pause-time', type=int, default=1, help='time paused for noise to render')
+    parser.add_argument('--pause-time', type=int, default=0, help='time paused for noise to render')
     opt = parser.parse_args()
     return opt
 
