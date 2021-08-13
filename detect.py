@@ -244,13 +244,15 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
             for i in range(len(candidates)):
                 generated_noise = noise_generator(*img.shape[-2:], period_x=candidates[i,0], period_y=candidates[i,1], octave=candidates[i,2], freq=candidates[i,3])
-                generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
+                # generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
+
+            generated_noise = torch.nn.functional.pad(generated_noise, (left, right, top, bottom), 'constant', 0)
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', np.array(generated_noise))
             time.sleep(pause_time) # in seconds
             
 
-            train_param = torch.cat((train_param, candidates),0)
+            train_param = torch.cat((train_param, candidates.to(img)),0)
 
 
         state_dict = None if frame_i < 5 else gp_model.state_dict()
