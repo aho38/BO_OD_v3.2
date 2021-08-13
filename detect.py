@@ -70,7 +70,8 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         half=False,  # use FP16 half-precision inference
         no_webcam=False, # whether to show webcam
         pause_time=1, # time pause between frame for noise to render
-        full_screen=False
+        full_screen=False,
+        num_queries=100,
         ):
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
@@ -175,6 +176,11 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
     for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
 
+        if frame_i == num_queries:
+            break
+
+
+
         # preprocess frames from image
         if pt:
             img = torch.from_numpy(img).to(device)
@@ -242,7 +248,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', np.array(generated_noise))
             time.sleep(pause_time) # in seconds
-            break
+            
 
             train_param = torch.cat((train_param, candidates),0)
 
@@ -401,6 +407,7 @@ def parse_opt():
     parser.add_argument('--no-webcam',action='store_true', help='show webcam')
     parser.add_argument('--pause-time', type=int, default=0, help='time paused for noise to render')
     parser.add_argument('--full-screen', action='store_true', help='whether to display image fullscreen ')
+    parser.add_argument('--num_queries', type=int, default=100, help='number of queries before breaking out of the loop')
     opt = parser.parse_args()
     return opt
 
