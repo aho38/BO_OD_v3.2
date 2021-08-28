@@ -205,11 +205,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             train_param[frame_i, 2] = gen_rand_tensor(low=0.51, high=4.5, size=(1, )).to(img) # octaves
             train_param[frame_i, 3] = gen_rand_tensor(low=4.0, high=32.0, size=(1, )).to(img)  # freq
 
-            if noise_size is None:
+            if noise_size is None: # instead of full screen, have noise_size be certain size and pad the rest of the screen black
                 generated_noise = noise_generator(*img.size()[-2:], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
 
                 generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
-                # generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
             else:
                 generated_noise = noise_generator(*[noise_size, noise_size], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
                 
@@ -220,18 +219,12 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
                 generated_noise = torch.nn.functional.pad(generated_noise, (left, right, top, bottom), 'constant', 0)
             
-            # left = int(np.floor(img.size(-2)/2))
-            # right = int(np.ceil(img.size(-2)/2))
-            # top = int(np.floor(img.size(-1)/2))
-            # bottom = int(np.ceil(img.size(-1)/2))
-
-            
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', generated_noise)
             time.sleep(pause_time) # in seconds
 
         else:
-            try:
+            try: # to avoid singular covariant matrix in GP
                 gp_model = get_fitted_model(train_x=train_param, train_obj=train_obj, state_dict=state_dict)
             except:
                 print("ERROR IN GP HAS OCCURED: please ensure covariant matrix is positive definite")
