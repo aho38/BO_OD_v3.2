@@ -7,7 +7,7 @@ from botorch import fit_gpytorch_model
 from utils.torch_utils import gen_rand_tensor
 from utils.bo_attack import evaluate
 
-def gen_initial_data(img, detector, model, dtype, device, n=5, imgsz=640, norm=16):
+def gen_initial_data(i, train_param, img):
     """
     arg:
         d: dimension of lower dimensional perturbation (i.e. delta \in d^r)
@@ -17,23 +17,13 @@ def gen_initial_data(img, detector, model, dtype, device, n=5, imgsz=640, norm=1
     """
     # range of parameter period_x,y and freq is [0, d] for d is side-length of img
     # get the min of image, img.shape = (C,H,W), side length
-    d = min(img.shape[1:])
-    
-    low = 1.0
-    high = d
 
-    train_param = torch.zeros((n, 4), dtype=dtype, device=device)
-    train_obj = torch.zeros(n,1, dtype=dtype, device=device)
-    for i in range(n):
-        ## period_x, period_y, and freq are all positive but smaller than d'. octaves are [1,4]
-        train_param[i, 0] = gen_rand_tensor(low=20.0, high=160.0, size=(1, ), dtype=dtype).to(device=device) # period_x
-        train_param[i, 1] = gen_rand_tensor(low=20.0, high=160.0, size=(1, ), dtype=dtype).to(device=device) # period_y
-        train_param[i, 2] = gen_rand_tensor(low=0.51, high=4.5, size=(1, ), dtype=dtype).to(device=device) # octaves
-        train_param[i, 3] = gen_rand_tensor(low=4.0, high=32.0, size=(1, ), dtype=dtype).to(device=device)  # freq
+    train_param[i, 0] = gen_rand_tensor(low=20.0, high=160.0, size=(1, ), dtype=img.dtype).to(img) # period_x
+    train_param[i, 1] = gen_rand_tensor(low=20.0, high=160.0, size=(1, ), dtype=img.dtype).to(img) # period_y
+    train_param[i, 2] = gen_rand_tensor(low=0.51, high=4.5, size=(1, ), dtype=img.dtype).to(img) # octaves
+    train_param[i, 3] = gen_rand_tensor(low=4.0, high=32.0, size=(1, ), dtype=img.dtype).to(img)  # freq
 
-    pred, train_obj = evaluate(img, detector, model, train_param[:,0], train_param[:,1], train_param[:,2], train_param[:,3], imgsz=imgsz, norm=norm )
-
-    return train_param, train_obj, pred
+    return train_param
 
 
 def optimize_acqf_and_get_observation(acq_func, img, detector, model, device, dtype, imgsz=640, norm=16, n=3, NUM_RESTARTS=10, RAW_SAMPLES=100):

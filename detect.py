@@ -33,19 +33,71 @@ from utils.general import check_img_size, check_requirements, check_imshow, colo
 from utils.plots import colors, plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_sync, gen_rand_tensor, init_torch_seeds
 from utils.perlin import noise_generator
-from utils.bo_utils import get_fitted_model
+from utils.bo_utils import get_fitted_model, gen_initial_data
 from botorch.optim import optimize_acqf
 from botorch.acquisition.monte_carlo import qExpectedImprovement
 from botorch.sampling.samplers import SobolQMCNormalSampler
+
+
 
 def grab_frame(cap):
     ret,frame = cap.read()
     return cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
 
+def process_pred(pred, path, img, im0s, dataset, save_dir, names,
+                save_crop=False, save_txt=False, save_conf=False, save_img=False, view_img = False, 
+                hide_labels=False, hide_conf=False, line_thickness=3, webcam=False):
+    # Process predictions
+    for i, det in enumerate(pred):  # detections per image
+        if webcam:  # batch_size >= 1
+            p, s, im0, frame = path[i], f'{i}: ', im0s[i].copy(), dataset.count
+        else:
+            p, s, im0, frame = path, '', im0s.copy(), getattr(dataset, 'frame', 0)
+
+        p = Path(p)  # to Path
+        save_path = str(save_dir / p.name)  # img.jpg
+        txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
+        s += '%gx%g ' % img.shape[2:]  # print string
+        gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+        imc = im0.copy() if save_crop else im0  # for save_crop
+        if len(det):
+            # Rescale boxes from img_size to im0 size
+            det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+
+            # Print results
+            for c in det[:, -1].unique():
+                n = (det[:, -1] == c).sum()  # detections per class
+                s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+
+            # Write results
+            for *xyxy, conf, cls in reversed(det):
+                if save_txt:  # Write to file
+                    xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+                    with open(txt_path + '.txt', 'a') as f:
+                        f.write(('%g ' * len(line)).rstrip() % line + '\n')
+
+                if save_img or save_crop or view_img:  # Add bbox to image
+                    c = int(cls)  # integer class
+                    label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
+                    plot_one_box(xyxy, im0, label=label, color=colors(c, True), line_thickness=line_thickness)
+                    if save_crop:
+                        save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+    return i, p, im0, save_path
+
+def process_img(img, device, half, pt):
+    if pt:
+        img = torch.from_numpy(img).to(device)
+        img = img.half() if half else img.float()  # uint8 to fp16/32
+        img /= 255.0  # 0 - 255 to 0.0 - 1.0
+    if len(img.shape) == 3:
+        img = img[None]  # expand for batch dim
+    return img     
+
 
 # @torch.no_grad()
 def run(weights='yolov5s.pt',  # model.pt path(s)
-        source='data/images',  # file/dir/URL/glob, 0 for webcam
+        source=0,  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
@@ -72,24 +124,22 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         pause_time=1, # time pause between frame for noise to render
         full_screen=False,
         num_queries=100,
-        noise_size=None,
         ):
     save_img = not nosave and not source.endswith('.txt')  # save inference images
-    webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
-        ('rtsp://', 'rtmp://', 'http://', 'https://'))
+    webcam = source.isnumeric()
 
-    # Directories
+    # ======== Directories ========
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
-    # Initialize
+    # ======== Initialize ========
     set_logging()
     device = select_device(device)
     half &= device.type != 'cpu'  # half precision only supported on CUDA
 
-    # Load model
+    # ======== Load model ========
     w = weights[0] if isinstance(weights, list) else weights
-    classify, pt, onnx = False, w.endswith('.pt'), w.endswith('.onnx')  # inference type
+    classify, pt = False, w.endswith('.pt')  # inference type
     stride, names = 64, [f'class{i}' for i in range(1000)]  # assign defaults
     if pt:
         model = attempt_load(weights, map_location=device)  # load FP32 model
@@ -100,13 +150,9 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         if classify:  # second-stage classifier
             modelc = load_classifier(name='resnet50', n=2)  # initialize
             modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
-    elif onnx:
-        check_requirements(('onnx', 'onnxruntime'))
-        import onnxruntime
-        session = onnxruntime.InferenceSession(w, None)
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
-    # Dataloader
+    # ======== Dataloader ========
     if webcam:
         view_img = check_imshow() if not no_webcam else False
         cudnn.benchmark = True  # set True to speed up constant image size inference
@@ -116,20 +162,18 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         dataset = LoadImages(source, img_size=imgsz, stride=stride)
         bs = 1  # batch_size
     vid_path, vid_writer = [None] * bs, [None] * bs
+    
 
-    if no_webcam:
-        view_img = False
-
-    # Initialize seed
+    # ======== Initialize seed ========
     seed = 0
     init_torch_seeds(seed=seed)
 
-    # Run inference
+    # ======== Run inference ========
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
     t0 = time.time()
 
-    # initialize img window
+    # ======== initialize img window ========
     screen = get_monitors()[0] # get monitor information
     window_name = 'window'
     win_x, win_y = [screen.width - 1, screen.height - 1 ]
@@ -137,99 +181,69 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         cv2.namedWindow('window', cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN,
                             cv2.WINDOW_FULLSCREEN)
+    
+    # =========== obtain initial solution ===========
+    input("Press ENTER when setup is ready...")
+
+    for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
+        # preprocess frames from image
+        img = process_img(img, device, half, pt)
         
 
-    # ===================== get initial frame information =====================
-    # set it as the ground truth
-    for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
-        if frame_i == 1: # skip the first frame in case camera is still adjusting
-            # preprocess frames from image
+        # Inference
+        with torch.no_grad():
             if pt:
-                img = torch.from_numpy(img).to(device)
-                img = img.half() if half else img.float()  # uint8 to fp16/32
-            elif onnx:
-                img = img.astype('float32')
-            img /= 255.0  # 0 - 255 to 0.0 - 1.0
-            if len(img.shape) == 3:
-                img = img[None]  # expand for batch dim
+                visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+                pred = model(img, augment=augment, visualize=visualize)[0]
 
-            # Inference
-            t1 = time_sync()
-            with torch.no_grad():
-                if pt:
-                    visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-                    pred = model(img, augment=augment, visualize=visualize)[0]
-                elif onnx:
-                    pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
+        # NMS
+        pred, _ = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+        pred[:] = [torch.cat((i[0:,0:4],i[0:,5:]), 1) for i in pred]
 
-            # NMS
-            pred, _ = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
-            pred[:] = [torch.cat((i[0:,0:4],i[0:,5:]), 1) for i in pred]
-            t2 = time_sync()
-            
+        _, p, im0, _ = process_pred(pred, path, img, im0s, dataset, save_dir, names, save_crop=save_crop, save_txt=save_txt, 
+                    save_conf=save_conf, save_img=save_img, view_img=view_img, hide_labels=hide_labels, hide_conf=hide_conf, 
+                    line_thickness=line_thickness, webcam=webcam)
+        
+        # Stream results
+        if view_img:
+            cv2.imshow(str(p), im0)
+            cv2.waitKey(1)  # 1 millisecond
+
+        gt_setup = input("Is the ground truth ready for training? [T/F]: \n") # ground truth setup. 
+
+        if gt_setup == 'T':
             labels = torch.cat((pred[0][0:, -1:], pred[0][0:,0:4]), 1) # target labels
-
-            print('Initial Label Generated')
             break
+        elif gt_setup == 'F':
+            continue
+        else:
+            print("Invalid Input \n")
+            continue
 
-        time.sleep(10) # in seconds so scene stablizes before taking ground truth
-    # ================================================================================
+    # =========== Training starts ===========
+    input("Press ENTER to let the training begin...")
 
     for frame_i, (path, img, im0s, vid_cap) in enumerate(dataset):
-
-        if frame_i == num_queries:
-            break
-
-
 
         # preprocess frames from image
-        if pt:
-            img = torch.from_numpy(img).to(device)
-            img = img.half() if half else img.float()  # uint8 to fp16/32
-        elif onnx:
-            img = img.astype('float32')
-        img /= 255.0  # 0 - 255 to 0.0 - 1.0
-        if len(img.shape) == 3:
-            img = img[None]  # expand for batch dim
-
-        
-
+        img = process_img(img, device, half, pt)
 
         ## ====================== BO TRAINING ======================
-        if frame_i == 0:
-            train_param = torch.zeros((5, 4)).to(img)
+        ### Initial Query
         if frame_i < 5:
+            ## initialize train param
+            if frame_i == 0:
+                train_param = torch.zeros((5, 4)).to(img) 
             ## period_x, period_y, and freq are all positive but smaller than d'. octaves are [1,4]
-            train_param[frame_i, 0] = gen_rand_tensor(low=20.0, high=160.0, size=(1, )).to(img) # period_x
-            train_param[frame_i, 1] = gen_rand_tensor(low=20.0, high=160.0, size=(1, )).to(img) # period_y
-            train_param[frame_i, 2] = gen_rand_tensor(low=0.51, high=4.5, size=(1, )).to(img) # octaves
-            train_param[frame_i, 3] = gen_rand_tensor(low=4.0, high=32.0, size=(1, )).to(img)  # freq
-
-            if noise_size is None:
-                generated_noise = noise_generator(*img.size()[-2:], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
-
-                generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
-                # generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
-            else:
-                generated_noise = noise_generator(*[noise_size, noise_size], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
-                
-                left = win_x + int(win_x * 0.4) - int(noise_size / 2)
-                right = win_x + int(win_x * 0.4) - int(noise_size / 2)
-                top = win_y + int(win_y * 0.2) - int(noise_size / 2)
-                bottom = win_y + int(win_y * 0.2) - int(noise_size / 2)
-
-                generated_noise = torch.nn.functional.pad(generated_noise, (left, right, top, bottom), 'constant', 0)
-            
-            # left = int(np.floor(img.size(-2)/2))
-            # right = int(np.ceil(img.size(-2)/2))
-            # top = int(np.floor(img.size(-1)/2))
-            # bottom = int(np.ceil(img.size(-1)/2))
+            train_param = gen_initial_data(frame_i, train_param, img)
+            ## whether full screen noise or a certain size of noise
+            generated_noise = noise_generator(*img.size()[-2:], period_x=train_param[frame_i,0], period_y=train_param[frame_i,1], octave=train_param[frame_i,2], freq=train_param[frame_i,3])
+            generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
 
             
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', generated_noise)
-            time.sleep(pause_time) # in seconds
-
+        ### Query starts
         else:
             try:
                 gp_model = get_fitted_model(train_x=train_param, train_obj=train_obj, state_dict=state_dict)
@@ -250,59 +264,47 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                                 )
 
             for i in range(len(candidates)):
-                # generated_noise = noise_generator(*img.shape[-2:], period_x=candidates[i,0], period_y=candidates[i,1], octave=candidates[i,2], freq=candidates[i,3])
-                # generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
 
-                if noise_size is None:
-                    generated_noise = noise_generator(*img.shape[-2:], period_x=candidates[i,0], period_y=candidates[i,1], octave=candidates[i,2], freq=candidates[i,3])
 
-                    generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
-                    # generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
-                else:
-                    generated_noise = noise_generator(*img.shape[-2:], period_x=candidates[i,0], period_y=candidates[i,1], octave=candidates[i,2], freq=candidates[i,3])
-                    
-                    left = win_x + int(win_x * 0.4) - int(noise_size / 2)
-                    right = win_x + int(win_x * 0.4) - int(noise_size / 2)
-                    top = win_y + int(win_y * 0.2) - int(noise_size / 2)
-                    bottom = win_y + int(win_y * 0.2) - int(noise_size / 2)
+                generated_noise = noise_generator(*img.shape[-2:], period_x=candidates[i,0], period_y=candidates[i,1], octave=candidates[i,2], freq=candidates[i,3])
+                generated_noise = torchvision.transforms.functional.resize(generated_noise[None, None], size=(int(win_y * 2),int(win_x * 2)))
 
-                    generated_noise = torch.nn.functional.pad(generated_noise, (left, right, top, bottom), 'constant', 0)
             
             generated_noise = np.array(generated_noise.squeeze())
             cv2.imshow('window', np.array(generated_noise))
-            time.sleep(pause_time) # in seconds
-            
 
+            # concat training param used to generate noise
             train_param = torch.cat((train_param, candidates.to(img)),0)
-
-
+        # save state_dict if GP models starts generating results
         state_dict = None if frame_i < 5 else gp_model.state_dict()
 
-        # ==========================================================
 
+        # ==== pause time ====
+        cv2.waitKey(100) # pause for the frame to rander 
+        # =========== Obtain Frame with updated noise ============
+        (path, img, im0s, vid_cap) = dataset.__next__()
 
-        # Inference
+        # ============== Process updated frames ==============
+        img = process_img(img, device, half, pt)
+
+        # ==================== Inference ====================
         t1 = time_sync()
         with torch.no_grad():
             if pt:
                 visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
                 pred = model(img, augment=augment, visualize=visualize)[0]
-            elif onnx:
-                pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
-
+            else: 
+                print('check model file type... not .pt')
+        
         ## ====================== Loss computation ======================
         loss_pred, _ = non_max_suppression(pred, 0.001, 0.6, classes, agnostic_nms, max_det=max_det)
 
         nl = len(labels)
-        tcls = labels[:, 0].tolist() if nl else [] #target class
         predn = torch.cat((loss_pred[0][:, 0:4], loss_pred[0][:,5:]),1)
 
         mask, correct_labels = process_batch_loss(predn, labels, torch.tensor(0.75).to(img))
 
         loss = compute_loss(torch.cat((loss_pred[0][:,4:5], predn[:,4:]), 1), mask, 'fabricate')
-
-        print(loss)
-        print(loss[None,None].size())
 
         if frame_i == 0:
             train_obj = loss[None,None]
@@ -313,8 +315,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             best_obj, indx = train_obj.max(0)
             best_pred = train_param[indx]
         
-        # ==========================================================
-
+        # ================================================================
 
         # NMS
         pred, _ = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
@@ -322,12 +323,8 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         pred[:] = [torch.cat((i[0:,0:4],i[0:,5:]), 1) for i in pred]
         t2 = time_sync()
 
-        # Second-stage classifier (optional)
-        if classify:
-            pred = apply_classifier(pred, modelc, img, im0s)
-
-        # Process predictions
         for i, det in enumerate(pred):  # detections per image
+            print(i)
             if webcam:  # batch_size >= 1
                 p, s, im0, frame = path[i], f'{i}: ', im0s[i].copy(), dataset.count
             else:
@@ -363,14 +360,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                         if save_crop:
                             save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
-            # Print time (inference + NMS)
-            print(f'{s}Done. ({t2 - t1:.3f}s)')
-
-            # Stream results
             if view_img:
                 cv2.imshow(str(p), im0)
                 cv2.waitKey(1)  # 1 millisecond
-
+            
             # Save results (image with detections)
             if save_img:
                 if dataset.mode == 'image':
@@ -390,15 +383,14 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
 
-    if save_txt or save_img:
-        s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
-        print(f"Results saved to {save_dir}{s}")
+        if frame_i == (num_queries - 1):
+            break
 
     if update:
         strip_optimizer(weights)  # update model (to fix SourceChangeWarning)
 
     print(f'Done. ({time.time() - t0:.3f}s)')
-    
+            
 
 
 def parse_opt():
@@ -431,7 +423,6 @@ def parse_opt():
     parser.add_argument('--pause-time', type=int, default=0, help='time paused for noise to render')
     parser.add_argument('--full-screen', action='store_true', help='whether to display image fullscreen ')
     parser.add_argument('--num_queries', type=int, default=100, help='number of queries before breaking out of the loop')
-    parser.add_argument('--noise-size', type=int, default=None, help='noise size')
     opt = parser.parse_args()
     return opt
 
