@@ -76,3 +76,9 @@ $ python main.py
   ```
   
 </details>
+
+## Object Detect
+
+```bash
+$ python detect.py --source 0
+```

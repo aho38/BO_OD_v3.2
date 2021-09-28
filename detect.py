@@ -245,7 +245,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             cv2.imshow('window', generated_noise)
         ### Query starts
         else:
-            try:
+            try: # to avoid singular covariant matrix in GP
                 gp_model = get_fitted_model(train_x=train_param, train_obj=train_obj, state_dict=state_dict)
             except:
                 print("ERROR IN GP HAS OCCURED: please ensure covariant matrix is positive definite")
