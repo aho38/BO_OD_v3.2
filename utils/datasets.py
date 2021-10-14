@@ -297,9 +297,9 @@ class LoadStreams:  # multiple IP or RTSP cameras
             if s.isnumeric():
                 s = eval(s) if s.isnumeric() else s  # i.e. s = '0' local webcam
                 cap = cv2.VideoCapture(s)
-                assert cap.isOpened(), f'Failed to open {s}'
             else:
                 cap = cv2.VideoCapture(s, cv2.CAP_GSTREAMER)
+            assert cap.isOpened(), f'Failed to open {s}'
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self.fps[i] = max(cap.get(cv2.CAP_PROP_FPS) % 100, 0) or 30.0  # 30 FPS fallback
