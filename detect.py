@@ -126,7 +126,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         num_queries=100,
         ):
     save_img = not nosave and not source.endswith('.txt')  # save inference images
-    webcam = source.isnumeric()
+    webcam = not no_webcam
 
     # ======== Directories ========
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
