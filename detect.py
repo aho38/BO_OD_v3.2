@@ -97,7 +97,7 @@ def process_img(img, device, half, pt):
 
 # @torch.no_grad()
 def run(weights='yolov5s.pt',  # model.pt path(s)
-        source=0,  # file/dir/URL/glob, 0 for webcam
+        source='0',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
