@@ -9,7 +9,7 @@ Using bayesian optimization to generate adversarial examples that targets Object
   Use <strong>Python>=3.7.0</strong> for your conda environment or <code>conda create --name [env_name] python=3.7</code>. Then clone the repository and install the required packages as the following:
   
   ```bash
-  $ git clone git@github.com:aho38/Light-Projection-Attack-with-Bayesian-Optimization.git
+  $ git clone git@github.com:aho38/LLNL-BO-lightprojection-attack.git
   $ cd LLNL-BO-lightprojection-attack
   $ pip install -r requirements.txt
   ```
