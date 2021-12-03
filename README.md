@@ -10,7 +10,7 @@ Using bayesian optimization to generate adversarial examples that targets Object
   
   ```bash
   $ git clone git@github.com:aho38/Light-Projection-Attack-with-Bayesian-Optimization.git
-  $ cd Light-Projection-Attack-with-Bayesian-Optimization
+  $ cd LLNL-BO-lightprojection-attack
   $ pip install -r requirements.txt
   ```
   
